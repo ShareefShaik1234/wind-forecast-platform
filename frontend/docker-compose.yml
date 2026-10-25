@@ -1,0 +1,19 @@
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: windwise-backend
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: windwise-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend

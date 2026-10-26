@@ -6,24 +6,26 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.analytics import compare_forecasts, calculate_metrics
+from app.analytics import calculate_metrics, compare_forecasts
 from app.elexon import fetch_wind_actuals, fetch_wind_forecasts
 
 
 UK_TZ = ZoneInfo("Europe/London")
 UTC = ZoneInfo("UTC")
 
-
 app = FastAPI(title="Wind Forecast Analytics API")
 
+# Allow requests from local development and deployed Vercel frontends.
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://wind-forecast-platform.vercel.app",
+    "https://wind-forecast-platform-cwqa4h6xk-shareefshaik1234s-projects.vercel.app",
+]
 
-# Allow the local React/Vite frontend to call this API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET"],
     allow_headers=["*"],
@@ -50,13 +52,15 @@ async def elexon_diagnostics():
 
         forecast_df = pd.DataFrame(forecasts)
 
-        if not forecast_df.empty:
+        if forecast_df.empty:
+            delivery_times = []
+        else:
             forecast_df["startTime"] = pd.to_datetime(
                 forecast_df["startTime"],
                 utc=True,
             )
 
-            target_forecasts = forecast_df[
+            target_forecasts = forecast_df.loc[
                 forecast_df["startTime"].dt.strftime("%Y-%m-%d")
                 == "2026-01-15"
             ]
@@ -67,15 +71,18 @@ async def elexon_diagnostics():
                 .dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 .tolist()
             )
-        else:
-            target_forecasts = forecast_df
-            delivery_times = []
 
         comparison = compare_forecasts(
             actuals,
             forecasts,
             cutoff_hour=10,
         )
+
+        sample = comparison.head(5).copy()
+
+        if not sample.empty:
+            sample["startTime"] = sample["startTime"].astype(str)
+            sample["publishTime"] = sample["publishTime"].astype(str)
 
         return {
             "delivery_date": "2026-01-15",
@@ -87,14 +94,7 @@ async def elexon_diagnostics():
             "forecast_delivery_timestamps": delivery_times,
             "matched_intervals": len(comparison),
             "metrics": calculate_metrics(comparison),
-            "matched_sample": (
-                comparison.head(5)
-                .assign(
-                    startTime=lambda df: df["startTime"].astype(str),
-                    publishTime=lambda df: df["publishTime"].astype(str),
-                )
-                .to_dict(orient="records")
-            ),
+            "matched_sample": sample.to_dict(orient="records"),
         }
 
     except Exception as exc:
@@ -149,21 +149,17 @@ async def analyze_delivery_day(
             cutoff_hour=cutoff_hour,
         )
 
-        records = []
-
-        for row in comparison.to_dict(orient="records"):
-            records.append(
-                {
-                    "startTime": row["startTime"].isoformat(),
-                    "publishTime": row["publishTime"].isoformat(),
-                    "actual_mw": float(row["actual_mw"]),
-                    "forecast_mw": float(row["forecast_mw"]),
-                    "error_mw": float(row["error_mw"]),
-                    "absolute_error_mw": float(
-                        row["absolute_error_mw"]
-                    ),
-                }
-            )
+        records = [
+            {
+                "startTime": row["startTime"].isoformat(),
+                "publishTime": row["publishTime"].isoformat(),
+                "actual_mw": float(row["actual_mw"]),
+                "forecast_mw": float(row["forecast_mw"]),
+                "error_mw": float(row["error_mw"]),
+                "absolute_error_mw": float(row["absolute_error_mw"]),
+            }
+            for row in comparison.to_dict(orient="records")
+        ]
 
         return {
             "delivery_date": delivery_date.isoformat(),
